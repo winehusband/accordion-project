@@ -1,11 +1,11 @@
-import React, { useReducer, useMemo, useState, useEffect, useRef } from 'react';
-import { ChevronDown, Plus, Calendar, AlertTriangle, Download } from 'lucide-react';
+import React, { useReducer, useState, useEffect, useRef } from 'react';
+import { AlertTriangle, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { gantt } from 'dhtmlx-gantt';
 import 'dhtmlx-gantt/codebase/dhtmlxgantt.css';
-import * as XLSX from 'xlsx';
 
 // ===================================================================================
-// 1. THE ENGINE'S BLUEPRINTS (DATA & LOGIC)
+// 1. DATA AND LOGIC
 // ===================================================================================
 
 const assetHierarchy = {
@@ -45,27 +45,27 @@ function appReducer(state, action) {
         ),
       };
     case 'GENERATE_TIMELINE': {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const conflicts = [];
-        const updatedAssets = state.selectedAssets.map(asset => {
-          if (!asset.goLiveDate) return { ...asset, tasks: [] };
-          const goLive = new Date(asset.goLiveDate);
-          const leadTime = Math.ceil((goLive - today) / (1000 * 60 * 60 * 24));
-          const requiredLeadTime = taskTemplate.reduce((max, task) => Math.max(max, task.offset + task.duration), 0);
-          if (leadTime < requiredLeadTime) {
-            conflicts.push({ asset: asset.asset, issue: `Go-live date requires ${requiredLeadTime} days lead time, but only ${leadTime} are available.` });
-          }
-          const tasks = taskTemplate.map(task => {
-            const endDate = new Date(goLive);
-            endDate.setDate(goLive.getDate() - task.offset);
-            const startDate = new Date(endDate);
-            startDate.setDate(endDate.getDate() - task.duration + 1);
-            return { ...task, startDate, endDate };
-          });
-          return { ...asset, tasks };
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const conflicts = [];
+      const updatedAssets = state.selectedAssets.map(asset => {
+        if (!asset.goLiveDate) return { ...asset, tasks: [] };
+        const goLive = new Date(asset.goLiveDate);
+        const leadTime = Math.ceil((goLive - today) / (1000 * 60 * 60 * 24));
+        const requiredLeadTime = taskTemplate.reduce((max, task) => Math.max(max, task.offset + task.duration), 0);
+        if (leadTime < requiredLeadTime) {
+          conflicts.push({ asset: asset.asset, issue: `Go-live date requires ${requiredLeadTime} days lead time, but only ${leadTime} are available.` });
+        }
+        const tasks = taskTemplate.map(task => {
+          const endDate = new Date(goLive);
+          endDate.setDate(goLive.getDate() - task.offset);
+          const startDate = new Date(endDate);
+          startDate.setDate(endDate.getDate() - task.duration + 1);
+          return { ...task, startDate, endDate };
         });
-        return { ...state, selectedAssets: updatedAssets, timelineConflicts: conflicts, showTimeline: true };
+        return { ...asset, tasks };
+      });
+      return { ...state, selectedAssets: updatedAssets, timelineConflicts: conflicts, showTimeline: true };
     }
     default:
       throw new Error();
@@ -73,17 +73,10 @@ function appReducer(state, action) {
 }
 
 // ===================================================================================
-// 2. UI COMPONENT
+// 2. PRESENTATIONAL COMPONENTS (LOVABLE STYLE)
 // ===================================================================================
 
-const ProjectAccordionUI = ({
-  state,
-  handleAssetAdd,
-  handleAssetUpdate,
-  handleAssetRemove,
-  handleGenerateTimeline,
-  handleExportExcel
-}) => {
+const AssetSelector = ({ onAddAsset }) => {
   const [category, setCategory] = useState('');
   const [platform, setPlatform] = useState('');
   const [asset, setAsset] = useState('');
@@ -93,7 +86,7 @@ const ProjectAccordionUI = ({
 
   const handleAdd = () => {
     if (category && platform && asset) {
-      handleAssetAdd({ category, platform, asset });
+      onAddAsset({ category, platform, asset });
       setCategory('');
       setPlatform('');
       setAsset('');
@@ -101,97 +94,103 @@ const ProjectAccordionUI = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <div className="max-w-7xl mx-auto p-6">
-        <header className="mb-10">
-          <h1 className="text-4xl font-bold text-slate-900">Project Timeline Planner</h1>
-          <p className="text-slate-600">Build, configure and visualise your campaign schedule</p>
-        </header>
-
-        <section className="bg-white p-6 rounded-xl shadow-md mb-10">
-          <h2 className="text-xl font-semibold mb-4 text-slate-800">1. Select an Asset</h2>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <select value={category} onChange={(e) => { setCategory(e.target.value); setPlatform(''); setAsset(''); }} className="p-2 border rounded-md">
-              <option value="">Choose Category...</option>
-              {Object.keys(assetHierarchy).map(cat => <option key={cat} value={cat}>{cat}</option>)}
-            </select>
-            <select value={platform} onChange={(e) => { setPlatform(e.target.value); setAsset(''); }} disabled={!category} className="p-2 border rounded-md">
-              <option value="">Choose Platform...</option>
-              {platforms.map(plat => <option key={plat} value={plat}>{plat}</option>)}
-            </select>
-            <select value={asset} onChange={(e) => setAsset(e.target.value)} disabled={!platform} className="p-2 border rounded-md">
-              <option value="">Choose Asset...</option>
-              {assets.map(ast => <option key={ast} value={ast}>{ast}</option>)}
-            </select>
-            <button onClick={handleAdd} disabled={!asset} className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-md hover:bg-blue-700 disabled:bg-blue-300">
-              Add Asset
-            </button>
-          </div>
-        </section>
-
-        {state.selectedAssets.length > 0 && (
-          <section className="bg-white p-6 rounded-xl shadow-md mb-10">
-            <h2 className="text-xl font-semibold mb-4 text-slate-800">2. Configure Assets</h2>
-            <div className="space-y-4">
-              {state.selectedAssets.map(asset => (
-                <div key={asset.id} className="flex flex-col md:flex-row items-start md:items-center justify-between p-4 border rounded-lg bg-slate-50">
-                  <div className="mb-2 md:mb-0">
-                    <div className="font-semibold text-slate-800">{asset.asset}</div>
-                    <div className="text-sm text-slate-600">{asset.category} → {asset.platform}</div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <label className="text-sm">Go-Live Date:</label>
-                    <input
-                      type="date"
-                      value={asset.goLiveDate}
-                      onChange={(e) => handleAssetUpdate(asset.id, { goLiveDate: e.target.value })}
-                      className="p-2 border rounded-md"
-                    />
-                    <button onClick={() => handleAssetRemove(asset.id)} className="text-red-500 hover:text-red-700 text-sm font-medium">Remove</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <button onClick={handleGenerateTimeline} className="mt-6 bg-green-600 text-white px-6 py-3 rounded-md font-semibold hover:bg-green-700">
-              Generate Timeline
-            </button>
-          </section>
-        )}
-
-        {state.showTimeline && (
-          <section className="bg-white p-6 rounded-xl shadow-md">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-slate-800">3. View Timeline</h2>
-              <button onClick={handleExportExcel} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 transition-all shadow-sm">
-                <Download size={16} />
-                Export to Excel
-              </button>
-            </div>
-            {state.timelineConflicts.length > 0 && (
-              <div className="p-4 mb-4 bg-yellow-100 border border-yellow-400 rounded-lg">
-                <div className="text-yellow-800 font-bold flex items-center gap-2">
-                  <AlertTriangle size={18} /> Timeline Conflicts
-                </div>
-                <ul className="mt-2 pl-5 list-disc text-sm text-yellow-700">
-                  {state.timelineConflicts.map((conflict, index) => (
-                    <li key={index}>{conflict.issue}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            <div className="border rounded-md overflow-hidden">
-              <GanttChart assets={state.selectedAssets} />
-            </div>
-          </section>
-        )}
+    <div className="bg-slate-800 p-6 rounded-xl">
+      <h2 className="text-white text-xl font-semibold mb-4">Add New Asset</h2>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <select value={category} onChange={(e) => { setCategory(e.target.value); setPlatform(''); setAsset(''); }} className="p-2 rounded">
+          <option value="">Select Category</option>
+          {Object.keys(assetHierarchy).map(cat => <option key={cat} value={cat}>{cat}</option>)}
+        </select>
+        <select value={platform} onChange={(e) => { setPlatform(e.target.value); setAsset(''); }} disabled={!category} className="p-2 rounded">
+          <option value="">Select Platform</option>
+          {platforms.map(plat => <option key={plat} value={plat}>{plat}</option>)}
+        </select>
+        <select value={asset} onChange={(e) => setAsset(e.target.value)} disabled={!platform} className="p-2 rounded">
+          <option value="">Select Asset</option>
+          {assets.map(ast => <option key={ast} value={ast}>{ast}</option>)}
+        </select>
+        <button onClick={handleAdd} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Add</button>
       </div>
     </div>
   );
 };
 
-// ===================================================================================
-// 3. ENGINE (Container)
-// ===================================================================================
+const AssetConfigurator = ({ assets, onUpdate, onRemove, onGenerateTimeline }) => (
+  <div className="bg-slate-800 p-6 rounded-xl space-y-4">
+    <h2 className="text-white text-xl font-semibold">Configure Assets</h2>
+    {assets.map(asset => (
+      <div key={asset.id} className="bg-slate-700 p-4 rounded flex justify-between items-center">
+        <div>
+          <p className="text-white font-medium">{asset.asset}</p>
+          <p className="text-gray-400 text-sm">{asset.category} → {asset.platform}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <input type="date" value={asset.goLiveDate} onChange={(e) => onUpdate(asset.id, { goLiveDate: e.target.value })} className="p-2 rounded" />
+          <button onClick={() => onRemove(asset.id)} className="text-red-400 hover:text-red-600 text-sm">Remove</button>
+        </div>
+      </div>
+    ))}
+    <button onClick={onGenerateTimeline} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Generate Timeline</button>
+  </div>
+);
+
+const GanttChart = ({ assets }) => {
+  const ganttRef = useRef(null);
+
+  useEffect(() => {
+    gantt.config.columns = [
+      { name: "text", label: "Task Name", width: '*', tree: true },
+      { name: "start_date", label: "Start Date", align: "center" },
+      { name: "duration", label: "Duration", align: "center" }
+    ];
+
+    gantt.config.order_branch = true;
+    gantt.config.order_branch_free = true;
+    gantt.config.work_time = true;
+    gantt.config.grid_width = 300;
+
+    gantt.init(ganttRef.current);
+    gantt.config.columns = [
+      { name: "text", label: "Task Name", width: '*', tree: true },
+      { name: "start_date", label: "Start Date", align: "center" },
+      { name: "duration", label: "Duration", align: "center" }
+    ];
+    gantt.init(ganttRef.current);
+    const tasks = {
+      data: assets.flatMap((asset) => {
+        const parentId = `asset-${asset.id}`;
+        const childTasks = asset.tasks.map((task, tIndex) => ({
+          id: `${asset.id}-${tIndex}`,
+          text: task.name,
+          start_date: task.startDate.toISOString().split('T')[0],
+          duration: task.duration,
+          parent: parentId,
+          assetName: asset.asset
+        }));
+        return [
+          {
+            id: parentId,
+            text: `${asset.asset} (${asset.platform})`,
+            open: true
+          },
+          ...childTasks
+        ];
+      }),
+      links: assets.flatMap((asset) => {
+        return asset.tasks.slice(1).map((task, i) => ({
+          id: `${asset.id}-link-${i}`,
+          source: `${asset.id}-${i}`,
+          target: `${asset.id}-${i + 1}`,
+          type: gantt.config.links.finish_to_start
+        }));
+      })
+    };
+    gantt.clearAll();
+    gantt.parse(tasks);
+  }, [assets]);
+
+  return <div ref={ganttRef} style={{ width: '100%', height: '500px' }} className="rounded overflow-hidden bg-white" />;
+};
 
 const ProjectAccordionEngine = () => {
   const [state, dispatch] = useReducer(appReducer, initialState);
@@ -202,10 +201,9 @@ const ProjectAccordionEngine = () => {
   const handleGenerateTimeline = () => dispatch({ type: 'GENERATE_TIMELINE' });
 
   const handleExportExcel = () => {
-    const dataForSheet = [];
-    dataForSheet.push(["Asset", "Platform", "Task", "Team", "Start Date", "End Date", "Duration (Days)"]);
+    const dataForSheet = [["Asset", "Platform", "Task", "Team", "Start Date", "End Date", "Duration (Days)"]];
     state.selectedAssets.forEach(asset => {
-      if (asset.tasks && asset.tasks.length > 0) {
+      if (asset.tasks?.length) {
         asset.tasks.forEach(task => {
           dataForSheet.push([
             asset.asset,
@@ -226,14 +224,40 @@ const ProjectAccordionEngine = () => {
   };
 
   return (
-    <ProjectAccordionUI
-      state={state}
-      handleAssetAdd={handleAssetAdd}
-      handleAssetRemove={handleAssetRemove}
-      handleAssetUpdate={handleAssetUpdate}
-      handleGenerateTimeline={handleGenerateTimeline}
-      handleExportExcel={handleExportExcel}
-    />
+    <div className="min-h-screen bg-slate-900 p-6">
+      <header className="text-center mb-12">
+        <h1 className="text-5xl font-bold text-white mb-4">Project Timeline Accordion</h1>
+        <p className="text-lg text-gray-400">Powered by MMM's Project Management</p>
+      </header>
+
+      <div className="max-w-6xl mx-auto space-y-10">
+        <AssetSelector onAddAsset={handleAssetAdd} />
+        {state.selectedAssets.length > 0 && (
+          <AssetConfigurator
+            assets={state.selectedAssets}
+            onRemove={handleAssetRemove}
+            onUpdate={handleAssetUpdate}
+            onGenerateTimeline={handleGenerateTimeline}
+          />
+        )}
+        {state.timelineConflicts.length > 0 && (
+          <div className="bg-yellow-100 text-yellow-800 p-4 rounded">
+            <div className="flex items-center gap-2 font-bold"><AlertTriangle size={18} /> Timeline Conflicts</div>
+            <ul className="mt-2 list-disc pl-5 text-sm">
+              {state.timelineConflicts.map((c, i) => <li key={i}>{c.issue}</li>)}
+            </ul>
+          </div>
+        )}
+        {state.showTimeline && (
+          <>
+            <div className="bg-white p-4 rounded shadow">
+              <GanttChart assets={state.selectedAssets} />
+            </div>
+            <button onClick={handleExportExcel} className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Export to Excel</button>
+          </>
+        )}
+      </div>
+    </div>
   );
 };
 
